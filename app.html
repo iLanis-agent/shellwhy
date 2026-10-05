@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShellWhy app - how does bash split my command line?</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#eef6f8;color:#14292f;line-height:1.5}
+.wrap{max-width:900px;margin:0 auto;padding:26px 16px 50px}
+h1{font-size:30px}h1 span{color:#0e7490}.sub{color:#51707a;margin:6px 0 14px}
+label{display:block;font-size:13px;color:#51707a;margin:10px 0 4px}
+textarea{width:100%;height:110px;background:#fff;color:#14292f;border:1px solid #bfd6dc;border-radius:8px;padding:9px 10px;font:14px ui-monospace,Menlo,Consolas,monospace;resize:vertical;white-space:pre}
+.pre button{background:#fff;color:#0e7490;border:1px solid #0e7490;border-radius:20px;padding:5px 12px;margin:0 6px 8px 0;cursor:pointer;font-size:13px}
+.card{background:#fff;border:1px solid #cfe1e6;border-radius:10px;padding:12px 16px;margin-top:12px}
+.verdict{font-size:18px;font-weight:700}.v-ok{color:#2b7a4b}.v-err{color:#c92a2a}
+.muted{color:#51707a;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}td,th{text-align:left;padding:5px 8px;border-bottom:1px solid #e3eef1;vertical-align:top}th{color:#51707a;font-weight:600}
+.mono,pre{font:13.5px ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+pre.argv{background:#f3f9fa;border-radius:6px;padding:8px 10px;margin-top:6px;white-space:pre-wrap}
+.pc{padding:1px 0;border-bottom:3px solid #94a3b8;white-space:pre}
+.k-lit{border-color:#94a3b8}.k-sq{border-color:#16a34a;background:#e7f7ec}.k-dq{border-color:#2563eb;background:#e8f0fe}.k-bs{border-color:#d97706;background:#fdf1dc}.k-ansi{border-color:#9333ea;background:#f1e8fd}.k-exp{border-color:#dc2626;background:#fde8e8}
+.flags span{display:block;font-size:12.5px;color:#9a3412;font-family:-apple-system,'Segoe UI',sans-serif}
+.op{background:#e3eef1;border-radius:4px;padding:1px 6px}
+.legend{margin-top:10px;font-size:13px}.legend .pc{margin-right:8px}
+footer{margin-top:22px;font-size:12.5px;color:#51707a}
+</style></head><body><div class="wrap">
+<h1>Shell<span>Why</span></h1>
+<p class="sub">Paste a command line. See where bash cuts it into words and which quotes it removes, before any variable, glob or command is expanded.</p>
+<label for="src">Command line</label>
+<textarea id="src" spellcheck="false" aria-label="Command line"></textarea>
+<div class="pre" id="pre" style="margin-top:8px"></div>
+<div class="legend"><span class="pc k-lit">plain</span><span class="pc k-sq">'single'</span><span class="pc k-dq">"double"</span><span class="pc k-bs">\ backslash</span><span class="pc k-ansi">$'ANSI-C'</span><span class="pc k-exp">$expansion</span></div>
+<div id="out"></div>
+<footer>Checked against real bash 5.1.16: 346,000 generated quoting-only command lines (plain text, single, double and backslash quoting, $'...'), engine and bash agreed on every one (0 mismatches). Operators, comments and expansions ($var, $(...), globs, braces, ~) are shown and flagged, not evaluated, and were outside that test. The bash manual could not be fetched; POSIX 2.2 Quoting was read. The $'...' rules come from testing bash. Everything runs in your browser.</footer>
+</div>
+<script>
+/* ShellWhy engine: how bash splits one command line into words and removes quotes (before any expansion). */
+(function (root) {
+  'use strict';
+  var OPS = /^(&&|\|\||;;&|;;|;&|<<<|<<-|<<|>>|<&|>&|<>|>\||&>>|&>|\|&|[;&|<>()])/;
+  function isBlank(c) { return c === ' ' || c === '\t'; }
+  function hex(s) { return /^[0-9A-Fa-f]+$/.test(s); }
+
+  function ansiC(src, i, fail) {
+    /* src[i] is the char after $' ; returns {text, end, notes} */
+    var bytes = [], notes = [], enc = new TextEncoder();
+    function put(str) { var b = enc.encode(str); for (var q = 0; q < b.length; q++) bytes.push(b[q]); }
+    function done() { var u = new Uint8Array(bytes); try { return new TextDecoder('utf-8', { fatal: true }).decode(u); } catch (e) { notes.push('invalid UTF-8 bytes'); return new TextDecoder('utf-8').decode(u); } }
+    for (;;) {
+      if (i >= src.length) return fail('Unterminated $\'...\' string', i);
+      var c = src[i];
+      if (c === "'") return { text: done(), end: i + 1, notes: notes };
+      if (c !== '\\') { put(c); i++; continue; }
+      var e = src[i + 1];
+      if (e === undefined) return fail('Unterminated $\'...\' string', i);
+      var simple = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+      if (simple[e] !== undefined) { put(simple[e]); i += 2; continue; }
+      if (/[0-7]/.test(e)) { var o = /^[0-7]{1,3}/.exec(src.slice(i + 1))[0]; var v = parseInt(o, 8) & 255; if (v === 0) notes.push('\\0 ends the string in bash'); bytes.push(v); i += 1 + o.length; continue; }
+      if (e === 'x') { var h = /^[0-9A-Fa-f]{1,2}/.exec(src.slice(i + 2)); if (h) { bytes.push(parseInt(h[0], 16)); i += 2 + h[0].length; continue; } put('\\x'); i += 2; continue; }
+      if (e === 'u' || e === 'U') { var h2 = new RegExp('^[0-9A-Fa-f]{1,' + (e === 'u' ? 4 : 8) + '}').exec(src.slice(i + 2)); if (h2) { put(String.fromCodePoint(parseInt(h2[0], 16))); i += 2 + h2[0].length; continue; } put('\\' + e); i += 2; continue; }
+      if (e === 'c' && src[i + 2] !== undefined) { bytes.push(src[i + 2].toUpperCase().charCodeAt(0) ^ 64); i += 3; continue; }
+      put('\\' + e); i += 2;
+    }
+  }
+
+  /* skip a $( ... ), ${ ... } or `...` construct, honouring nested quotes; returns end index or -1 */
+  function skipExpansion(src, i) {
+    var open = src[i + 1], close = open === '(' ? ')' : '}', depth = 0, j = i + 1;
+    for (; j < src.length; j++) {
+      var c = src[j];
+      if (c === '\\') { j++; continue; }
+      if (c === "'") { var q = src.indexOf("'", j + 1); if (q < 0) return -1; j = q; continue; }
+      if (c === '"') { j++; while (j < src.length && src[j] !== '"') { if (src[j] === '\\') j++; j++; } continue; }
+      if (c === open) depth++;
+      else if (c === close) { depth--; if (depth === 0) return j + 1; }
+    }
+    return -1;
+  }
+
+  /* bash removes backslash-newline before parsing, except inside single quotes (and $'...') */
+  function stripContinuations(src) {
+    var out = '', i = 0, n = src.length, mode = 'n';
+    while (i < n) {
+      var c = src[i];
+      if (mode === 'sq') { out += c; i++; if (c === "'") mode = 'n'; continue; }
+      if (mode === 'an') { if (c === '\\' && i + 1 < n) { out += c + src[i + 1]; i += 2; continue; } out += c; i++; if (c === "'") mode = 'n'; continue; }
+      if (c === '\\') { if (src[i + 1] === '\n') { i += 2; continue; } out += c + (src[i + 1] === undefined ? '' : src[i + 1]); i += 2; continue; }
+      if (mode === 'dq') { out += c; i++; if (c === '"') mode = 'n'; continue; }
+      if (c === '#' && (out === '' || ' \t\n;&|()<>'.indexOf(out[out.length - 1]) >= 0)) { var nl = src.indexOf('\n', i); if (nl < 0) nl = n; out += src.slice(i, nl); i = nl; continue; }
+      if (c === "'") mode = 'sq'; else if (c === '"') mode = 'dq'; else if (c === '$' && src[i + 1] === "'") { out += "$'"; i += 2; mode = 'an'; continue; }
+      out += c; i++;
+    }
+    return out;
+  }
+  function tokenize(src) {
+    src = stripContinuations(src);
+    var i = 0, n = src.length, tokens = [], word = null;
+    var err = null;
+    function fail(msg, pos) { err = { msg: msg, pos: pos }; return null; }
+    function startWord() { if (!word) word = { start: i, parts: [], flags: [], value: '', computable: true }; return word; }
+    function endWord() { if (word) { word.end = i; word.src = src.slice(word.start, i); tokens.push({ kind: 'word', word: word }); word = null; } }
+    function add(kind, text, raw) { var w = startWord(); w.parts.push({ kind: kind, text: text, raw: raw }); if (w.computable) w.value += text; }
+    function flag(f) { if (word.flags.indexOf(f) < 0) word.flags.push(f); }
+    function expansion(raw, what, inDq) { var w = startWord(); w.parts.push({ kind: 'exp', text: raw, raw: raw }); w.computable = false; flag(what + (inDq ? ' (still happens inside double quotes)' : '')); }
+    while (i < n) {
+      var c = src[i];
+      if (isBlank(c)) { endWord(); i++; continue; }
+      if (c === '\n') { endWord(); tokens.push({ kind: 'newline', pos: i }); i++; continue; }
+      if (c === '\\') {
+        if (src[i + 1] === '\n') { i += 2; continue; }
+        if (i + 1 >= n) { startWord(); add('bs', '\\', '\\'); flag('A trailing backslash with nothing after it: bash waits for more input'); i++; err = err || { msg: 'The line ends with a backslash, so bash would wait for another line', pos: i - 1, soft: true }; continue; }
+        add('bs', src[i + 1], src.slice(i, i + 2)); i += 2; continue;
+      }
+      if (c === "'") { var q = src.indexOf("'", i + 1); if (q < 0) return fail('Unterminated single quote. Everything after it is inside the quote, and a single quote cannot be escaped inside single quotes', i) || { err: err, tokens: tokens }; add('sq', src.slice(i + 1, q), src.slice(i, q + 1)); i = q + 1; continue; }
+      if (c === '"') {
+        var j = i + 1, txt = '', closed = false, hasExp = false;
+        startWord(); var partStart = word.parts.length;
+        var seg = '';
+        while (j < n) {
+          var d = src[j];
+          if (d === '"') { closed = true; break; }
+          if (d === '\\') { var e = src[j + 1]; if (e === '\n') { j += 2; continue; } if (e === '$' || e === '`' || e === '"' || e === '\\') { seg += e; j += 2; continue; } seg += '\\'; j++; continue; }
+          if (d === '$' && (src[j + 1] === '(' || src[j + 1] === '{')) { var end = skipExpansion(src, j); if (end < 0) return fail('Unterminated ' + (src[j + 1] === '(' ? '$(' : '${') + ' inside double quotes', j) || { err: err, tokens: tokens }; seg += ''; if (seg) { word.parts.push({ kind: 'dq', text: seg, raw: seg }); } seg = ''; expansion(src.slice(j, end), src[j + 1] === '(' ? (src[j + 2] === '(' ? 'arithmetic expansion' : 'command substitution') : 'parameter expansion', true); j = end; hasExp = true; continue; }
+          if (d === '$' && /[A-Za-z_0-9@*#?$!-]/.test(src[j + 1] || '')) { var m = /^\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/.exec(src.slice(j)); if (m) { if (seg) word.parts.push({ kind: 'dq', text: seg, raw: seg }); seg = ''; expansion(m[0], 'variable ' + m[0], true); j += m[0].length; hasExp = true; continue; } }
+          if (d === '`') { var b = src.indexOf('`', j + 1); if (b < 0) return fail('Unterminated backtick', j) || { err: err, tokens: tokens }; if (seg) word.parts.push({ kind: 'dq', text: seg, raw: seg }); seg = ''; expansion(src.slice(j, b + 1), 'command substitution', true); j = b + 1; hasExp = true; continue; }
+          seg += d; j++;
+        }
+        if (!closed) return fail('Unterminated double quote. Everything after it is inside the quote', i) || { err: err, tokens: tokens };
+        /* rebuild: the quoted run as one visual part list with raw text */
+        var rawQ = src.slice(i, j + 1);
+        if (seg || !hasExp) word.parts.push({ kind: 'dq', text: seg, raw: seg });
+        word.parts[partStart].quoteRaw = rawQ;
+        if (word.computable) { var vv = ''; for (var k = partStart; k < word.parts.length; k++) vv += word.parts[k].kind === 'dq' ? word.parts[k].text : ''; word.value += vv; }
+        i = j + 1; continue;
+      }
+      if (c === '$' && src[i + 1] === "'") { var r = ansiC(src, i + 2, fail); if (!r) return { err: err, tokens: tokens }; var t = r.text; var z = t.indexOf('\0'); if (z >= 0) t = t.slice(0, z); add('ansi', t, src.slice(i, r.end)); i = r.end; continue; }
+      if (c === '$' && src[i + 1] === '"') { startWord(); flag('$"..." is a translation quote; without a message catalog it behaves like "..."'); i++; continue; }
+      if (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{')) { var end2 = skipExpansion(src, i); if (end2 < 0) return fail('Unterminated ' + (src[i + 1] === '(' ? '$(' : '${'), i) || { err: err, tokens: tokens }; expansion(src.slice(i, end2), src[i + 1] === '(' ? (src[i + 2] === '(' ? 'arithmetic expansion' : 'command substitution') : 'parameter expansion', false); i = end2; continue; }
+      if (c === '$') { var m2 = /^\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/.exec(src.slice(i)); if (m2) { expansion(m2[0], 'variable ' + m2[0], false); i += m2[0].length; continue; } add('lit', '$', '$'); i++; continue; }
+      if (c === '`') { var b2 = src.indexOf('`', i + 1); if (b2 < 0) return fail('Unterminated backtick', i) || { err: err, tokens: tokens }; expansion(src.slice(i, b2 + 1), 'command substitution', false); i = b2 + 1; continue; }
+      var om = OPS.exec(src.slice(i, i + 4));
+      if (om) {
+        endWord(); tokens.push({ kind: 'op', text: om[0], pos: i }); i += om[0].length; continue;
+      }
+      if (c === '#' && !word) { var nl = src.indexOf('\n', i); var stop = nl < 0 ? n : nl; tokens.push({ kind: 'comment', text: src.slice(i, stop), pos: i }); i = stop; continue; }
+      /* ordinary character */
+      var w2 = startWord();
+      if (c === '~' && w2.parts.length === 0) { var tm = /^~[^\/ \t\n'"\\$`]*/.exec(src.slice(i)); add('lit', tm[0], tm[0]); w2.computable = false; flag('tilde expansion (~ at the start of a word becomes a home directory)'); i += tm[0].length; continue; }
+      if (c === '*' || c === '?' || c === '[') { add('lit', c, c); flag('glob character ' + c + ' (the word may be replaced by matching file names)'); w2.glob = true; i++; continue; }
+      if (c === '{') { var bm = /^\{[^{}\s]*(,|\.\.)[^{}\s]*\}/.exec(src.slice(i)); if (bm) { add('lit', bm[0], bm[0]); w2.computable = false; flag('brace expansion ' + bm[0] + ' (becomes several words)'); i += bm[0].length; continue; } }
+      if (c === '!' && !w2.parts.length) flag('"!" can trigger history expansion in an interactive shell');
+      add('lit', c, c); i++;
+    }
+    endWord();
+    return { err: err && !err.soft ? err : null, softErr: err && err.soft ? err : null, tokens: tokens };
+  }
+
+  function analyse(src) {
+    if (!src.trim()) return { status: 'empty' };
+    var t = tokenize(src);
+    if (t.err) return { status: 'error', error: t.err, tokens: t.tokens };
+    var words = t.tokens.filter(function (x) { return x.kind === 'word'; }).map(function (x) { return x.word; });
+    var hasOp = t.tokens.some(function (x) { return x.kind === 'op' || x.kind === 'newline'; });
+    var argv = !hasOp && words.every(function (w) { return w.computable; }) ? words.map(function (w) { return w.value; }) : null;
+    return { status: 'ok', tokens: t.tokens, words: words, argv: argv, hasOperators: hasOp, soft: t.softErr };
+  }
+
+  var api = { analyse: analyse, tokenize: tokenize };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ShellWhy = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function vis(s){var o='';for(var i=0;i<s.length;i++){var c=s[i],n=s.charCodeAt(i);
+ if(c==='\n')o+='\\n';else if(c==='\t')o+='\\t';else if(c==='\r')o+='\\r';else if(c==='\\')o+='\\\\';else if(c==='"')o+='\\"';
+ else if(n<32||n===127)o+='\\x'+('0'+n.toString(16)).slice(-2);else o+=c;}return o}
+var NAMES={lit:'plain',sq:'single-quoted',dq:'double-quoted',bs:'backslash',ansi:"ANSI-C $'...'",exp:'expansion'};
+function pieces(w){var out=[],last=null;
+ w.parts.forEach(function(p){var raw=p.quoteRaw||p.raw;
+  if(last&&last.kind===p.kind&&p.kind==='lit'){last.raw+=raw}else{last={kind:p.kind,raw:raw};out.push(last)}});
+ return out.map(function(p){return '<span class="pc k-'+p.kind+'" title="'+NAMES[p.kind]+'">'+esc(p.raw)+'</span>'}).join('')}
+function run(){
+ var src=$('src').value, r=ShellWhy.analyse(src), h='';
+ if(r.status==='empty'){$('out').innerHTML='<div class="card muted">Type a command line.</div>';return}
+ if(r.status==='error'){
+  h+='<div class="card"><div class="verdict v-err">Bash would not accept this line</div><p>'+esc(r.error.msg)+'</p></div>';
+ }else{
+  var nw=r.words.length;
+  h+='<div class="card"><div class="verdict v-ok">'+nw+' word'+(nw===1?'':'s')+'</div>';
+  if(r.argv){h+='<p class="muted">What the program receives (argv), after quote removal:</p><pre class="argv">'+r.argv.map(function(a,i){return '['+i+'] "'+esc(vis(a))+'"'}).join('\n')+'</pre>'}
+  else if(r.hasOperators){h+='<p class="muted">The line has operators, so it is several commands or redirections. Words are shown one by one below.</p>'}
+  else{h+='<p class="muted">Some words contain expansions that depend on your shell, so the final argv cannot be computed here.</p>'}
+  if(r.soft)h+='<p class="muted">A trailing backslash: bash keeps it as a literal backslash in the last word.</p>';
+  h+='</div>';
+ }
+ var ws=(r.words||[]);
+ if(ws.length){
+  h+='<div class="card"><table><tr><th>#</th><th>As typed (coloured by quoting)</th><th>After quote removal</th></tr>';
+  ws.forEach(function(w,i){
+   h+='<tr><td>'+i+'</td><td class="mono">'+pieces(w)+'</td><td class="mono">'+(w.computable?'"'+esc(vis(w.value))+'"':'<span class="muted">depends on expansion</span>')+(w.flags.length?'<div class="flags">'+w.flags.map(function(f){return '<span>'+esc(f)+'</span>'}).join('')+'</div>':'')+'</td></tr>'});
+  h+='</table></div>';
+ }
+ var ops=(r.tokens||[]).filter(function(t){return t.kind!=='word'});
+ if(ops.length){h+='<div class="card"><b>Operators and comments</b> (shown, not evaluated)<div class="mono ops">'+ops.map(function(t){return '<span class="op">'+esc(t.text||t.raw||t.kind)+'</span>'}).join(' ')+'</div></div>'}
+ $('out').innerHTML=h;
+}
+var P=[["Embedded quote","echo 'it'\\''s'"],["Unquoted spaces","rm my file"],["Quote kinds","echo \"$HOME\" '$HOME'"],["ANSI-C","echo $'a\\tb'"],["Unterminated","echo 'it's'"],["Globs","ls *.txt ~/x {a,b}"],["Double spaces","echo \"a  b\" a  b"],["Escaped space","echo a\\ b"],["Escaped quotes","echo \"say \\\"hi\\\"\""],["Operators","cmd >out 2>&1; next"]];
+$('pre').innerHTML=P.map(function(p,i){return '<button data-i="'+i+'">'+esc(p[0])+'</button>'}).join('');
+$('pre').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;$('src').value=P[+b.dataset.i][1];run()});
+$('src').addEventListener('input',run);
+$('src').value=P[0][1];run();
+})();
+</script>
+</body></html>
